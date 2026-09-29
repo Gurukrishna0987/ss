@@ -20,7 +20,7 @@ import config
 from storage.database import connect, init_db as initialize_database
 from storage.database import read_pipeline_heartbeat
 from blockchain.connector import BlockchainConnector
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_file
 from flask_socketio import SocketIO, emit
 
 # ── App Setup ──────────────────────────────────────
@@ -67,9 +67,25 @@ ACTION_MAP = {
 # CORE ROUTES
 # ═══════════════════════════════════════════════════
 
+# Built React + Tailwind SOC dashboard (soc-ui/ → dashboard/static/soc/).
+SOC_INDEX = os.path.join(BASE_DIR, "dashboard", "static", "soc", "index.html")
+
+
 @app.route("/")
 def index():
-    """Main route mapped back to the SOC Dashboard."""
+    """Main route — serves the React SOC dashboard when built.
+
+    Falls back to the legacy template if the compiled bundle is missing
+    (e.g. a fresh clone before running ``npm run build`` in ``soc-ui/``).
+    """
+    if os.path.exists(SOC_INDEX):
+        return send_file(SOC_INDEX)
+    return render_template("dashboard.html")
+
+
+@app.route("/legacy")
+def legacy_dashboard():
+    """Original single-file SOC dashboard, kept for reference."""
     return render_template("dashboard.html")
 
 
