@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
-from flask import Flask, jsonify, render_template, request, session
+from flask import Flask, jsonify, render_template, request, session, send_from_directory
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BASE_DIR)
@@ -131,6 +131,9 @@ def _ransom_note_family(filename: str):
 
 @app.route("/")
 def index():
+    frontend = os.path.join(BASE_DIR, "static", "explorer")
+    if os.path.isfile(os.path.join(frontend, "index.html")):
+        return send_from_directory(frontend, "index.html")
     return render_template("victim.html")
 
 
