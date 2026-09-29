@@ -60,3 +60,6 @@ dist/
 
 # SOC dashboard build tooling
 soc-ui/node_modules/
+
+# Victim frontend tooling
+victim-ui/node_modules/
