@@ -57,3 +57,6 @@ dist/
 
 # Agent session scratch (memory, not repo content)
 .arena/
+
+# SOC dashboard build tooling
+soc-ui/node_modules/
