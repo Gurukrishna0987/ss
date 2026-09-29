@@ -155,6 +155,16 @@ def simulate_scenario(scenario, *, baseline: bool, root: Path,
             "events_per_sec": rate,
             "is_suspicious_speed": rate >= config.FILES_PER_SECOND_THRESHOLD,
             "ext_changed": ext_changed,
+            # Structural fingerprint fields. The live pipeline carries
+            # these (EventPipeline._merge_event); without them the rule
+            # engine's strongest signals — invalid magic header and
+            # chi²-uniform ciphertext — were dead in the benchmark, so
+            # the battery silently measured a weaker detector than the
+            # shipped one and only reached quarantine via the campaign
+            # escalator.
+            "chi2_uniformity": result.get("chi2_uniformity"),
+            "chi2_tail": result.get("chi2_tail"),
+            "magic_ok": result.get("magic_ok", True),
         }
         # Identical hard-confirmation signal collection as the live
         # pipeline (EventPipeline._merge_event). The benchmark passes an
@@ -380,8 +390,10 @@ def write_markdown(summary: dict, out_path: Path) -> Path:
         "polymorphic": "randomized order, extensions, timing",
         "baseline_first": "clean edit then encryption (delta)",
         "silent_unknown_ext": "no prior history, unknown exts",
-        "image_blindspot": "in-range entropy, no rename — see blind spots",
-        "note_dropper": "ransom note is the only signal (blind-spot payload)",
+        "image_blindspot": ("in-range entropy, no rename — closed by the "
+                            "chi² + magic structural fingerprint"),
+        "note_dropper": ("note confirms the incident at op 0, before any "
+                         "file is encrypted"),
         "backup_tamper": "backup store deleted — defense tamper signal",
     }
     for name, row in summary["attacks"].items():
@@ -520,8 +532,9 @@ def write_markdown(summary: dict, out_path: Path) -> Path:
         ]
         verdict = (
             f"The Random Forest is a **high-recall, opt-in** engine: it "
-            f"detects {rfs['detection_rate']}% of attacks (closing the "
-            f"image blind spot the rules publish as a limitation) but "
+            f"detects {rfs['detection_rate']}% of attacks — the same "
+            f"recall the rule engine achieves with the structural "
+            f"fingerprint — but it "
             f"false-quarantines "
             f"{rfs['false_quarantines']} legitimate run(s)"
             f"{' — ' + ', '.join(fq_workloads) if fq_workloads else ''} — "

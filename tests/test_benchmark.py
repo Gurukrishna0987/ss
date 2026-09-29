@@ -54,11 +54,48 @@ class BenchmarkHarnessTests(unittest.TestCase):
         self.assertEqual(without["max_action"], 3)
         self.assertEqual(with_baseline["max_action"], 3)
 
-    def test_single_file_ciphertext_quarantines(self):
-        """A single file whose content is statistically-uniform ciphertext
-        (chi² ≈ 255 + invalid magic header for its extension) trips the
-        structural ciphertext fingerprint and is quarantined on first
-        sight — you don't need a second file to confirm AES-output."""
+    def test_single_file_known_extension_ciphertext_quarantines(self):
+        """Where the declared extension gives us GROUND TRUTH, the
+        structural fingerprint decides on first sight: a .jpg whose
+        bytes are statistically-uniform ciphertext with an invalid
+        magic header is quarantined immediately — you do not need a
+        second file to confirm AES output.
+
+        This is the case the old ``test_single_file_ciphertext_
+        quarantines`` claimed, but it exercised it with a disguise
+        extension (no ground truth — see the test below)."""
+        from benchmark.scenarios import (Op, Scenario, compressed_bytes,
+                                         random_bytes)
+        import random
+        rng = random.Random(7)
+        scenario = Scenario(
+            "single_known_ext", "attack",
+            "A real .jpg replaced in place by uniform ciphertext",
+            [("Photos/pic.jpg",
+              compressed_bytes(rng, b"\xff\xd8\xff\xe0\x00\x10JFIF\x00",
+                               65536))],
+            [Op("modify", "Photos/pic.jpg", random_bytes(rng, 65536),
+                delay_before=1.0)],
+        )
+        run = runner.simulate_scenario(scenario, baseline=True, root=_root())
+        self.assertTrue(run["detected"])
+        self.assertEqual(run["first_detection_op"], 0)
+        self.assertEqual(run["max_action"], 3)  # QUARANTINE on first sight
+
+    def test_single_file_unknown_extension_ciphertext_alerts_only(self):
+        """The deliberate safety trade-off, pinned so it cannot be
+        "fixed" by accident.
+
+        For an UNKNOWN extension (here the disguise ``.wnaCry``) there
+        is no format ground truth: we cannot distinguish ciphertext
+        from an arbitrary new binary format, and there is no magic
+        signature to invalidate. So a chi²-uniform file is detected
+        and ALERTED, but never quarantined on a single sighting.
+
+        Measured: removing this gate takes the Random Forest path from
+        0 false quarantines to 3 (FP rate 14.3% -> 57.1%) on the
+        workload battery. Alerting keeps the file visible; the second
+        file in the window escalates it (see the next test)."""
         from benchmark.scenarios import Op, Scenario, random_bytes
         import random
         rng = random.Random(7)
@@ -71,7 +108,33 @@ class BenchmarkHarnessTests(unittest.TestCase):
         )
         run = runner.simulate_scenario(scenario, baseline=True, root=_root())
         self.assertTrue(run["detected"])
-        self.assertEqual(run["max_action"], 3)  # QUARANTINE — strong ciphertext fingerprint
+        # ALERT, not quarantine: no corroboration, no ground truth.
+        self.assertEqual(run["max_action"], 1)
+
+    def test_unknown_extension_campaign_escalates_to_quarantine(self):
+        """The single-file alert above is not the end of the story: the
+        moment a SECOND file shows the same signature inside the
+        campaign window, the campaign escalator confirms the incident
+        and quarantines. This is the advertised "kill at file 2"
+        behaviour, and it is what keeps the 0-false-quarantine bar
+        without leaving a single-file alert unactioned forever."""
+        from benchmark.scenarios import Op, Scenario, random_bytes
+        import random
+        rng = random.Random(7)
+        scenario = Scenario(
+            "two_file_disguise", "attack",
+            "Two high-entropy ciphertext files renamed to disguise extensions",
+            [("Data/blob_0.dat", random_bytes(rng, 65536)),
+             ("Data/blob_1.dat", random_bytes(rng, 65536))],
+            [Op("rename", "Data/blob_0.dat", random_bytes(rng, 65536),
+                new_path="Data/blob_0.dat.wnaCry", delay_before=0.5),
+             Op("rename", "Data/blob_1.dat", random_bytes(rng, 65536),
+                new_path="Data/blob_1.dat.wnaCry", delay_before=0.5)],
+        )
+        run = runner.simulate_scenario(scenario, baseline=True, root=_root())
+        self.assertTrue(run["detected"])
+        self.assertEqual(run["first_detection_op"], 0)   # alert at file 1
+        self.assertEqual(run["max_action"], 3)           # killed at file 2
 
     def test_campaign_never_fires_on_high_entropy_media(self):
         """Legitimate high-entropy multi-file work (photo import: no

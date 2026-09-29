@@ -86,4 +86,4 @@ These emit DeprecationWarning and delegate to canonical implementations.
 
 ### For 200 Marks
 
-This architecture is not PowerPoint - it's running code with 126 tests, deterministic benchmark, live demo verified, honest limitations published.
+This architecture is not PowerPoint - it's running code with 149 tests passing, a deterministic benchmark, live demo verified, honest limitations published.

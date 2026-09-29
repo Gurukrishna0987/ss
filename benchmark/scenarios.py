@@ -109,6 +109,11 @@ DISGUISE_EXTS = [".locked", ".encrypted", ".crypt", ".wnaCry", ".paid",
 _OFFICE_EXTS = [".txt", ".docx", ".xlsx", ".pdf"]
 PAYLOAD = 65536
 
+# Valid JPEG SOI + JFIF header. Fixtures that are supposed to be real
+# photos must carry a real header and a structured (non-uniform) body,
+# otherwise they already look like ciphertext before any attack runs.
+_JPEG_MAGIC = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+
 
 def _estate(rng: random.Random, n_files: int,
             exts=_OFFICE_EXTS) -> list:
@@ -215,11 +220,20 @@ def attack_image_blindspot(seed: int) -> Scenario:
     """Slow, in-place encryption of .jpg files: entropy stays within
     the normal image range (7.0-7.8 + 0.5 margin), no rename, no
     speed. The original images are ALSO ~8.0, so there is no delta.
-    This is a documented blind spot of entropy-only detection in BOTH
-    baseline modes: the encrypted payload is indistinguishable from
-    native compressed content."""
+    By Shannon entropy alone the encrypted payload is indistinguishable
+    from native compressed content — this was the documented blind
+    spot. The structural fingerprint (chi² uniformity + magic-byte
+    validation) is what separates them.
+
+    The estate is built with ``compressed_bytes`` (valid JPEG magic
+    header, structured non-uniform body) so the fixture is a REAL
+    image, not uniform noise. Building it with ``random_bytes`` made
+    the pristine photos look like ciphertext at t=0 — they scored
+    100 and would have been quarantined before any attack ran, which
+    turned "6/6 detected" into a tautology instead of evidence."""
     rng = random.Random(seed)
-    estate = [(f"Photos/pic_{i:02d}.jpg", random_bytes(rng, PAYLOAD))
+    estate = [(f"Photos/pic_{i:02d}.jpg",
+               compressed_bytes(rng, _JPEG_MAGIC, PAYLOAD))
               for i in range(4)]
     ops = []
     for rel, _content in estate:
@@ -227,20 +241,23 @@ def attack_image_blindspot(seed: int) -> Scenario:
                       delay_before=3.0))
     return Scenario(
         "image_blindspot", "attack",
-        "Slow in-place encryption of images (no rename, in-range entropy) — "
-        "documented blind spot",
+        "Slow in-place encryption of real images (no rename, in-range "
+        "entropy) — closed by the structural ciphertext fingerprint",
         estate, ops,
     )
 
 
 def attack_note_dropper(seed: int) -> Scenario:
     """Drops a ransom note, then encrypts an image in place (the
-    entropy blind spot). The ONLY signal is the note itself — if the
-    note detector works, this is detected instantly."""
+    entropy blind spot). The note is what makes this detected at op 0
+    — BEFORE any file has been encrypted — which is the property this
+    scenario exists to prove. The image is a real structured JPEG; it
+    would also be caught by the structural fingerprint at op 1, but by
+    then the note has already confirmed the incident."""
     rng = random.Random(seed)
     estate = [
         ("Documents/report.docx", text_bytes(rng, 2048)),
-        ("Photos/pic_00.jpg", random_bytes(rng, PAYLOAD)),
+        ("Photos/pic_00.jpg", compressed_bytes(rng, _JPEG_MAGIC, PAYLOAD)),
     ]
     ops = [
         Op("create", "Documents/Restore-My-Files.txt",

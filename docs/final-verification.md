@@ -73,11 +73,35 @@ Blockchain: fallback mode, tx_count=4
 ## Tests
 
 ```
-126 tests OK (skipped=2 optional)
+149 tests OK, 0 fail (skipped=2 optional)
 py_compile OK all files
-benchmark: 42/48 detection (87.5%) rules, 0 false quarantines, slow_crawler 6/6, polymorphic 6/6
-recovery drill: 45.1% (honest, no-baseline losses)
+benchmark: 48/48 detection (100%) rules, 0 false quarantines, slow_crawler 6/6, polymorphic 6/6
+benchmark: image_blindspot 6/6 detected AND 6/6 contained on the corrected JPEG fixture
+RF (opt-in): 48/48 detection but 3 false quarantines on db_dump - why rules are the default
+recovery drill: 126/246 restored (51.2%), 114 contained, 6 lost
 ```
+
+## Corrections applied after independent review (see docs/peer-review.md)
+
+Three defects were fixed; all numbers above are post-fix.
+
+1. **Benchmark harness dropped the structural fingerprint fields.** The event
+   dict built in `benchmark/runner.py` omitted `chi2_uniformity`, `chi2_tail`
+   and `magic_ok`, which the live pipeline carries
+   (`EventPipeline._merge_event`). The rule engine's strongest signals were
+   therefore dead in the benchmark - it only ever reached quarantine via the
+   campaign escalator. Fields now propagated; the battery measures the shipped
+   detector.
+2. **The image_blindspot fixture was not a JPEG.** The estate was built with
+   `random_bytes()`, so the pristine photos already scored 100 and would have
+   been quarantined before any attack ran - "6/6 detected" was a tautology.
+   Now built with `compressed_bytes()` (valid JFIF header, structured body).
+   Result is unchanged at 6/6, so the claim is now *earned*.
+3. **The recovery drill bypassed the campaign escalator.** It called
+   `make_decision()` instead of `DecisionEngine.decide()`, measuring a weaker
+   detector than production. Losses fell from 93 to 6 once the shipped chain
+   was used. The 6 that remain are all `backup_tamper`, where the attacker
+   destroys the backup store first.
 
 ## For Examiners
 

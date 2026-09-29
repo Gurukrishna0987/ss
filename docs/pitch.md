@@ -65,14 +65,33 @@ Benchmark battery: 8 attacks × baseline modes × seeds + 7 workloads, real Deci
 
 | Metric | Rules | RF |
 |--------|-------|-----|
-| Attack detection | 42/48 (87.5%) | 48/48 (100%) |
-| False quarantines | 0 | 6 |
-| Median ops to detect | 1-2 | 1 |
-| Blind spot | image_blindspot (in-place high-entropy no rename) | none |
+| Attack detection | 48/48 (100%) | 48/48 (100%) |
+| False quarantines | 0 | 3 (`db_dump`) |
+| Legitimate workloads alerted | 3/21 (`git_burst`) | 12/21 |
+| Median ops to detect | 1 | 1 |
+| image_blindspot (in-place, no rename) | 6/6 detected, 6/6 contained | 6/6 |
 
-## Why 87.5% Not 100% (Honest Limitation)
+## The Image Blind Spot, and Why It Is Now Closed
 
-`image_blindspot`: in-place encryption of jpg/mp4 without rename leaves entropy in normal range (7.0-7.8). No entropy-only detector can catch it. RF closes it via other features but breaks 0-FQ. Published openly.
+`image_blindspot` is in-place encryption of jpg/mp4 without rename: Shannon
+entropy stays inside the normal range (7.0-7.8), so no entropy-only detector
+can see it. That is a real limit of entropy and we do not pretend otherwise.
+
+What breaks the tie is **structure, not level**. A real JPEG carries Huffman
+tables and format markers, so its byte histogram is sharply peaked (chi² in the
+tens of thousands). AES output is statistically flat (chi² ≈ 255). The detector
+combines a chi² uniformity test with magic-byte validation:
+
+```
+real JPEG, before : H=7.62  chi²=52951  magic_ok=True    score=  0.0  -> IGNORE
+same file, after  : H=8.00  chi²=  235  magic_ok=False   score=100.0  -> QUARANTINE
+```
+
+Measured 6/6 on the corrected fixture, with 0 false quarantines.
+
+The remaining honest trade-off is the opposite one: RF also detects 100%, but
+it false-quarantines high-entropy `db_dump` files, so the deterministic rule
+engine is the default.
 
 ## Quarantine Decryption (Honest)
 
@@ -91,7 +110,7 @@ Can privileged user decrypt quarantine? **No.** Attacker overwrites with `os.ura
 - Zombie-aware termination (instant, not force-kill after 3s)
 - Real-time socket.io push (sub-second, verified)
 - Local ledger fallback (works without Ganache, labeled)
-- 126 tests pass, 0 fail, deterministic benchmark
+- 149 tests pass, 0 fail (2 optional skipped), deterministic benchmark
 
 ## For 200 Marks
 

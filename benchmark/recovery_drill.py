@@ -10,8 +10,15 @@
 #      production pipeline does at monitor start).
 #   3. Replay the attack ops through the REAL chain:
 #      EntropyAnalyzer -> capture every state -> collect_threat_flags
-#      -> make_decision -> execute_response with REAL quarantine and
-#      REAL restore (no dry-run — the files are throwaway).
+#      -> DecisionEngine.decide() -> execute_response with REAL
+#      quarantine and REAL restore (no dry-run — the files are
+#      throwaway).
+#
+#      Decisions go through DecisionEngine, NOT the bare
+#      make_decision() rule function: DecisionEngine adds the
+#      cross-file campaign escalator that production ships. Bypassing
+#      it measured a weaker detector than the real pipeline and
+#      reported files as "lost" that production contains at file 2.
 #   4. Byte-for-byte verification of the post-drill estate, and RTO:
 #         - RTO in file operations (first / full recovery)
 #         - RTO in attacker-clock seconds (the scenario's own timing)
@@ -30,7 +37,6 @@
 # Run:  python -m benchmark.recovery_drill
 # ============================================================
 
-import contextlib
 import json
 import os
 import shutil
@@ -49,7 +55,7 @@ from benchmark.scenarios import ATTACKS, WORKLOADS
 from blockchain.fingerprint_exchange import FingerprintExchange
 from entropy.entropy_calculator import EntropyAnalyzer
 from monitoring.defense_guard import collect_threat_flags
-from monitoring.pipeline_runner import execute_response, make_decision
+from monitoring.pipeline_runner import (DecisionEngine, execute_response)
 from response.backup_manager import BackupManager
 
 
@@ -111,6 +117,47 @@ def run_drill_scenario(scenario, *, baseline: bool, workdir: Path,
     attacker_files = []    # files created by the attack (not pre-attack estate)
     wall_response = 0.0
     quarantine_count = 0
+    # absolute path -> the pre-attack relative path it came from.
+    # Campaign sweep events are replayed for EARLIER ops, so this map
+    # is what lets a swept file be attributed back to its victim file.
+    path_to_rel = {}
+
+    # Production decision chain: the rule engine wrapped with the
+    # cross-file campaign escalator (see the module docstring).
+    engine = DecisionEngine(engine="rules")
+
+    def _record(path, outcome, op_index):
+        """Book one response outcome (primary event or campaign sweep)."""
+        nonlocal quarantine_count, first_recovery_op
+        # Real-mode outcomes: QUARANTINED, RESPONSE_PARTIAL
+        # (e.g. the file was already deleted), plus a
+        # +RESTORED / +RESTORE_FAILED suffix.
+        outcome = outcome or ""
+        restored = "+RESTORED" in outcome
+        contained = ("QUARANTINE" in outcome
+                     or "PARTIAL" in outcome
+                     or "MOVED" in outcome)
+        if contained:
+            quarantine_count += 1
+        # Track per victim file: is it safe now?
+        rel = path_to_rel.get(str(path))
+        if rel is None:
+            return
+        if rel not in pre_attack:
+            return
+        entry = per_file.setdefault(
+            rel, {"recovered": False, "contained": False,
+                  "safe_op": None}
+        )
+        if restored:
+            entry["recovered"] = True
+            entry["safe_op"] = op_index
+            if first_recovery_op is None:
+                first_recovery_op = op_index
+        elif contained:
+            entry["contained"] = True
+            if entry["safe_op"] is None:
+                entry["safe_op"] = op_index
 
     # Real quarantine + real restore, side effects kept inside workdir.
     original_dr = config.DRY_RUN
@@ -151,6 +198,10 @@ def run_drill_scenario(scenario, *, baseline: bool, workdir: Path,
                 target = old_path
             else:
                 raise ValueError(f"Unknown op kind: {op.kind}")
+
+            # Remember which victim file this on-disk path came from, so
+            # a later campaign sweep of this path can be attributed.
+            path_to_rel[str(target)] = op.rel_path
 
             event_type = {"create": "CREATED", "modify": "MODIFIED",
                           "rename": "RENAMED", "delete": "DELETED"}[op.kind]
@@ -198,50 +249,68 @@ def run_drill_scenario(scenario, *, baseline: bool, workdir: Path,
                       getattr(scenario, "protected_paths", ())),
                 exchange=exchange,
             ))
-            action = make_decision(event)
+            # Production decides through DecisionEngine: the rule
+            # engine PLUS the cross-file campaign escalator.
+            decision = engine.decide(event)
+            action = int(decision.get("action", 0))
+
+            # Campaign kill override: a RENAMED event fires after the
+            # attacker's handle is closed, so this event may carry no
+            # verified process. Use the process the tracker verified
+            # for the earlier campaign files — it is the same malware
+            # across the whole attack (mirrors the live pipeline).
+            if (action >= config.ACTION_TERMINATE
+                    and decision.get("kill_override")):
+                proc = event.get("process")
+                if not (isinstance(proc, dict)
+                        and proc.get("identity_verified")
+                        and proc.get("pid")):
+                    event["process"] = decision["kill_override"]
+
             if action >= config.ACTION_ALERT:
                 if first_detection_op is None:
                     first_detection_op = i
 
             if action == config.ACTION_TERMINATE_QUARANTINE:
-                decision = {
-                    "engine": "rules",
-                    "action": action,
-                    "action_name": "TERMINATED+QUARANTINED",
-                    "confidence": 1.0,
-                    "explanation": "recovery drill",
-                }
+                decision = dict(decision)
+                decision.setdefault("engine", "rules")
+                decision["action"] = action
+                decision["action_name"] = "TERMINATED+QUARANTINED"
                 t0 = time.perf_counter()
                 outcome = execute_response(
                     action, event, _BcStub(), events_db, decision,
                     backup=backup, exchange=exchange,
                 )
                 wall_response += time.perf_counter() - t0
-                # Real-mode outcomes: QUARANTINED, RESPONSE_PARTIAL
-                # (e.g. the file was already deleted), plus a
-                # +RESTORED / +RESTORE_FAILED suffix.
-                restored = "+RESTORED" in outcome
-                contained = ("QUARANTINE" in outcome
-                             or "PARTIAL" in outcome
-                             or "MOVED" in outcome)
-                if contained:
-                    quarantine_count += 1
-                # Track per victim file: is it safe now?
-                rel = op.rel_path
-                if rel in pre_attack:
-                    entry = per_file.setdefault(
-                        rel, {"recovered": False, "contained": False,
-                              "safe_op": None}
-                    )
-                    if restored:
-                        entry["recovered"] = True
-                        entry["safe_op"] = i
-                        if first_recovery_op is None:
-                            first_recovery_op = i
-                    elif contained:
-                        entry["contained"] = True
-                        if entry["safe_op"] is None:
-                            entry["safe_op"] = i
+                _record(target, outcome, i)
+
+                # ── Campaign sweep ──────────────────────────────
+                # Once a campaign is confirmed, production contains
+                # and restores the OTHER files the malware touched in
+                # this window. Without this the drill reported those
+                # files as lost even though the live pipeline had
+                # already recovered them.
+                for sweep_event in (decision.get("sweep_events") or []):
+                    se = dict(sweep_event)
+                    se_proc = se.get("process")
+                    if isinstance(se_proc, dict) and se_proc.get("pid"):
+                        se["process"] = dict(se_proc,
+                                             identity_verified=False)
+                    se_decision = dict(decision)
+                    se_decision["explanation"] = (
+                        "Campaign sweep: "
+                        + str(decision.get("explanation") or ""))
+                    try:
+                        t0 = time.perf_counter()
+                        sw_outcome = execute_response(
+                            config.ACTION_TERMINATE_QUARANTINE, se,
+                            _BcStub(), events_db, se_decision,
+                            backup=backup, exchange=exchange,
+                        )
+                        wall_response += time.perf_counter() - t0
+                    except Exception:
+                        continue
+                    _record(Path(se.get("file_path") or ""), sw_outcome, i)
     finally:
         config.DRY_RUN = original_dr
         config.QUARANTINE_DIR = original_qd
