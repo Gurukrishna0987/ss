@@ -36,13 +36,14 @@ python lab.py
 |---------|-----|---------|
 | SOC Dashboard | http://127.0.0.1:5000 | Real-time feed, entropy graph, alerts |
 | Victim PC | http://127.0.0.1:5001 | Neutral file explorer (This PC) |
-| Attacker Console | http://127.0.0.1:8001 | Launch controlled attacks |
+| Attacker Console | http://127.0.0.1:8001 | Operator console (React) - launch, live telemetry, kill chain |
 
 **Demo Flow for 200 Marks:**
 1. Open Victim (5001) - 18 files, Quarantine 🔒 Locked
 2. Open SOC (5000) - 0 threats, heartbeat live
-3. Open Attacker (8001) - Launch WannaCry
+3. Open Attacker (8001) - pick a payload, hit `Execute payload` twice (arm + confirm)
 4. SOC shows: `THREAT` → `CAMPAIGN CONFIRMED` → `KILL` → `QUARANTINE+RESTORED` → `Post-kill verification`
+   - Attacker console simultaneously flips to `KILLED BY DEFENDER` (exit 42) and reports how many staged files were overwritten before the kill
 5. Victim still shows 18 files, 0 .WNCRY
 6. Unlock vault `victim_user / 1234` - see 3 ciphertext evidence files (cannot be decrypted, only forensics)
 
@@ -67,7 +68,34 @@ ResponseModule
   └─ Forensic Report + Blockchain Ledger
     ↓
 SOC Dashboard (socket.io real-time push 0.4s) + Victim Explorer (neutral)
+    ↓
+Attacker Console (8001) - drives the attack process, reports the verdict honestly
 ```
+
+## 🖥️ Operator Consoles (React front ends)
+
+Three purpose-built front ends, all built with Vite + Tailwind and checked in as
+compiled bundles so the lab runs without Node at demo time:
+
+| UI | Source | Built to | Served by |
+|----|--------|----------|-----------|
+| SOC dashboard | `soc-ui/` | `dashboard/static/soc/` | Flask (5000) |
+| Victim explorer | `victim-ui/` | `victim_server/static/explorer/` | Flask (5001) |
+| Attacker console | `attacker-ui/` | `attacker_server/static/console/` | stdlib HTTP (8001) |
+
+The attacker console shows a payload catalog, campaign controls (two-step
+launch, pause, abort, rate 0.1x-5x, estate restore), live telemetry (phase,
+staged/encrypted/skipped, bytes, observed rate, elapsed), an observed kill-chain
+timeline, the victim estate summary, and the streamed process log with level
+filters. Every value comes from `/api/stats` or `/api/targets` - nothing is
+invented, and the defender termination is reported as the run outcome.
+
+```bash
+cd attacker-ui && npm install && npm run build && npm test   # rebuild console
+```
+
+`attacker_server/app.py` falls back to the legacy single-file console
+(`attacker_server/templates/attacker.html`) when the bundle is absent.
 
 ## 🔒 Security Features
 

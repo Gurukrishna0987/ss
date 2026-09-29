@@ -32,7 +32,8 @@ ResponseModule
     ↓
 SOC Dashboard (5000, socket.io push 0.4s new_event + live_update)
 Victim Explorer (5001, neutral, vault PIN victim_user/1234, quarantine_only)
-Attacker Console (8001, 10 families, safe_path, token entropy-lab)
+Attacker Console (8001, React console in attacker_server/static/console, 10 families,
+                  /api/targets estate view, safe_path, token entropy-lab)
 ```
 
 ## Implementation - Final Verification
@@ -169,6 +170,68 @@ python install.py  # Quarantine folder created at install time
 lab.py running 3 ports 200 OK
 ```
 
+## Attacker Server Redesign (console v2)
+
+**Problem**: the attacker surface was a single-file green-on-black CRT page with
+three real defects — the pause control never reflected state, log lines rendered
+as `undefined` (the service streamed strings while the page expected objects),
+and `EXFIL LOG` exported the in-process engine log, which is always empty now
+that attacks run as separate OS processes.
+
+**Change**: the console is now a React + Tailwind app (`attacker-ui/`) built into
+`attacker_server/static/console/` and served by the same dependency-free stdlib
+service on 8001, matching the SOC and victim front ends. The legacy page remains
+the fallback when the bundle is missing.
+
+**Files**
+
+- `attacker-ui/` — source, Vite/Tailwind/Vitest config, jsdom render tests
+- `attacker_server/static/console/` — committed build (no Node needed at demo time)
+- `attacker_server/app.py` — bundle serving with runtime-value injection,
+  `GET /api/targets`, richer `GET /api/stats`, log export fix, `do_HEAD` hardening
+- `tests/test_attacker_console.py` — 13 service tests (delivery, telemetry, traversal, auth)
+
+**Service changes (all additive)**
+
+```python
+GET /api/stats   # + paused, speed_factor, elapsed_seconds, files_per_second,
+                 #   exit_code, targets, structured log [{time, at, msg, level}]
+GET /api/targets # NEW read-only estate: totals, bytes, attackable, locked,
+                 #   notes, per-folder counts, extension mix, quarantine evidence
+GET /api/log     # exports the live child process log with header + timestamps
+do_HEAD          # limited to this service's own routes (was: whole repo cwd)
+```
+
+**Console features**
+
+| Panel | Content |
+|-------|---------|
+| Payload catalog | ten families from the shared `catalog.py`, search, `1`-`9`/`0` shortcuts, locked while a run is active |
+| Campaign control | two-step arm/confirm launch, pause/resume, abort (SIGINT), restore estate, log export, 0.1x-5x rate |
+| Telemetry | phase, staged/encrypted/skipped/notes, bytes overwritten, observed rate, elapsed, exit code |
+| Kill chain | phase transitions observed by the console, including the defender termination verdict |
+| Victim estate | files/size/attackable/locked/notes/evidence + folder and extension mix |
+| Process console | levels (info/warn/error/critical), filters, grep, follow, copy, download |
+
+**Verified**
+
+```
+attacker-ui: npm run build OK, npm test -> 6/6 render tests pass
+tests/test_attacker_console.py -> 13/13 pass
+python -m unittest discover -s tests -> 163 tests, same 3 pre-existing failures as main
+live: POST /api/launch wannacry -> SCANNING -> ENCRYPTING (18 staged, rate 1.0/s)
+      pause -> PAUSED, resume -> ENCRYPTING, speed 5x -> speed_factor 5.0
+      defender SIGTERM -> phase KILLED_BY_DEFENDER, exit_code 42, defender_killed true
+      GET /api/reset -> 18/18 fixtures restored, 0 .WNCRY
+      GET /static/console/../../config.py -> 404
+no-token POST /api/launch -> 403; Bearer entropy-lab -> 200
+```
+
+**Honesty preserved**: every console number is a server measurement. The
+kill-chain timeline is labelled "observed by this console"; the rate is labelled
+observed (cumulative), not instantaneous; the defender termination is displayed
+as the run outcome rather than hidden.
+
 ## Outcome - 200 Marks Ready
 
 - Clean working project, no bugs, no doubts
@@ -184,7 +247,8 @@ lab.py running 3 ports 200 OK
 2. `python lab.py` → show 3 URLs, pipeline running, 18 baseline
 3. Open Victim 5001 → 18 files, Quarantine locked
 4. Open SOC 5000 → 0 threats, heartbeat live
-5. Open Attacker 8001 → Launch WannaCry
+5. Open Attacker 8001 → pick WannaCry → `Execute payload` twice (arm + confirm);
+   console shows SCANNING → ENCRYPTING → KILLED BY DEFENDER (exit 42)
 6. SOC shows live: THREAT → CAMPAIGN CONFIRMED → KILL → QUARANTINE+RESTORED → Post-kill verification
 7. Victim still 18 files, 0 .WNCRY
 8. Unlock vault 1234 → 3 evidence files, meta.json, forensic reports
