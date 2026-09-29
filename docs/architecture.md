@@ -49,7 +49,10 @@ monitoring.event_pipeline.EventPipeline (queue 10000, batch 50)
 2. `create_fake_files.py --clean`: 18 files (6 Documents, 4 Downloads, 4 Desktop, 4 Pictures)
 3. `PipelineRunner`: snapshot 18 files into backup store (baseline for restore)
 4. `FileMonitor`: watch victim_server/user_files + protected stores (backup/quarantine deletion = tamper signal)
-5. Dashboard (5000), Victim (5001), Attacker (8001) Flask + socketio threading mode
+5. Dashboard (5000), Victim (5001) Flask + socketio threading mode
+6. Attacker service (8001): stdlib ThreadingHTTPServer serving the React console
+   (`attacker-ui/` -> `attacker_server/static/console/`) and the control API;
+   falls back to `templates/attacker.html` when the bundle is absent
 
 ### Key Fixes for Industry Level (Final Year)
 
@@ -60,6 +63,7 @@ monitoring.event_pipeline.EventPipeline (queue 10000, batch 50)
 - **Real-time push**: dashboard push_updates() polls DB for new ids, emits new_event + live_update via socketio, client uses io({transports:['websocket','polling']})
 - **Neutral victim explorer**: /api/files returns only name/size/modified/icon, no encrypted counts, no family, Quarantine locked behind vault
 - **SHA3-256 dual hash**: storage/hashing.py provides sha3_256_file + dual_hash_file, response_module uses SHA3-256 primary
+- **Console telemetry contract**: attacker `GET /api/stats` returns the same keys whether idle or running (phase, paused, progress, staged/hit/skipped/notes, bytes, observed rate, elapsed, exit code, defender verdict) plus structured log entries `{time, at, msg, level}`; `GET /api/targets` returns estate aggregates only and never file paths
 
 ### Data Flow for Demo (WannaCry)
 
@@ -69,6 +73,25 @@ monitoring.event_pipeline.EventPipeline (queue 10000, batch 50)
 4. Response: terminate PID 3101 → SUCCESS → quarantine file 2 → restore clean v1 (captured at boot) → sweep file 1 → quarantine+restore
 5. Post-kill verification: walk estate, Tax_Returns.pdf hash differs from last clean (4.9 vs 7.79) → quarantine+restore
 6. Estate: 18/18 restored, 0 .WNCRY, 3 evidence files in quarantine_storage/
+
+### Attacker Console Redesign (front end)
+
+The operator console is a React + Tailwind app (`attacker-ui/`) built into
+`attacker_server/static/console/` and served by the same stdlib service. It is
+the offensive half of one product: same canvas, panels and typography as the SOC
+dashboard, amber/red accents for the offensive surface.
+
+- Payload catalog (<- `/api/families`, shared `catalog.py`), search + `1`-`9`/`0` selection
+- Two-step launch confirmation; pause/resume/abort mapped to control-file pause and SIGINT
+- Live telemetry from `/api/stats`, kill-chain timeline of transitions observed by the console
+- Victim estate summary from `/api/targets`: totals, size, attackable, locked artifacts, notes, quarantine evidence
+- Process console with levels, filters, grep, follow, copy and `campaign.log` export
+- Path-traversal-safe asset serving; `do_HEAD` limited to the service's own routes
+  (the inherited handler would otherwise expose repo file metadata)
+
+The console reports the defense verdict as the run outcome: when the pipeline
+terminates the process, the page switches to `KILLED BY DEFENDER`, shows exit
+code 42 and how many staged files were overwritten before the kill.
 
 ### Security Boundaries
 

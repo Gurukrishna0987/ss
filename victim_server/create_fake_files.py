@@ -172,6 +172,20 @@ Email: {name.lower().replace(' ', '.')}@example.com
 Notes: {random.choice(['Client', 'Vendor', 'Partner', 'Prospect'])}
 """)
     return "".join(contacts)
+# Zip members default to the wall clock, which made two runs of this
+# generator produce different bytes for the same seed (and made the
+# determinism test fail whenever the two calls straddled a second
+# boundary). Fixture archives are stamped with the fixture date instead.
+ZIP_FIXTURE_DATE = (2024, 10, 1, 0, 0, 0)
+
+
+def _write_zip_member(archive, name, content):
+    """Add a byte-stable member to *archive*."""
+    info = zipfile.ZipInfo(name, date_time=ZIP_FIXTURE_DATE)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    archive.writestr(info, content)
+
+
 def make_xlsx_content():
     """Create a small valid Excel workbook using only the standard library."""
     files = {
@@ -205,7 +219,7 @@ def make_xlsx_content():
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, content in files.items():
-            archive.writestr(name, content)
+            _write_zip_member(archive, name, content)
     return output.getvalue()
 def make_docx_content():
     """Create a valid minimal Word document."""
@@ -218,7 +232,7 @@ def make_docx_content():
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, content in files.items():
-            archive.writestr(name, content)
+            _write_zip_member(archive, name, content)
     return output.getvalue()
 def make_pdf_content():
     """Create a valid one-page PDF without third-party libraries."""

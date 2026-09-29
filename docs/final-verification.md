@@ -82,3 +82,42 @@ recovery drill: 45.1% (honest, no-baseline losses)
 ## For Examiners
 
 This is working system, not PowerPoint. Launch attack yourself from attacker console, see kill at file 2, 18/18 restored, vault evidence.
+
+## Attacker Console - FIXED (redesign)
+
+**Bug 1**: `GET /api/stats` never returned `paused`, so the console's pause button and
+engine status always read "RUNNING" even while the attack process was paused.
+**Fix**: `_child_state()` now reports `paused` (from the operator control file) plus
+`speed_factor`, `elapsed_seconds`, `files_per_second`, `exit_code`, `started_at`.
+
+**Bug 2**: The service streamed log lines as strings while the page rendered
+`{time, msg}` objects → every line displayed as `undefined  <text>`.
+**Fix**: `_stream_reader()` timestamps each line on arrival and classifies it
+(`info`/`warn`/`error`/`critical`); the console renders `time  message` with levels.
+
+**Bug 3**: `EXFIL LOG` downloaded `engines.current_stats()`, the in-process engine log,
+which is always empty now that attacks run as separate OS processes.
+**Fix**: `/api/log` exports the live child process log with a header (family, phase,
+exit code, counters) and per-line timestamps.
+
+**Bug 4**: `Handler` inherited `do_HEAD` from `SimpleHTTPRequestHandler`, which walks the
+process working directory — HEAD requests could probe any file in the repository.
+**Fix**: `do_HEAD` is limited to the routes this service serves; everything else is 404.
+
+**Bug 5**: The "locked" counter looked for a hard-coded extension list that was missing
+`.alphv`, so a second ALPHV run's renamed files were still counted as attackable.
+**Fix**: locked extensions and ransom-note markers now come from the shared `catalog.py`.
+
+**Also**: estate browsing for the operator console is provided by a new read-only
+`GET /api/targets` that returns aggregates only — totals, bytes, attackable, locked,
+notes, per-folder counts, extension mix and quarantine evidence. No file paths or
+contents leave the service.
+
+Verified:
+```
+npm test (attacker-ui)                -> 6/6 render tests
+python -m unittest tests.test_attacker_console -> 13/13
+GET /static/console/../../config.py   -> 404
+POST /api/launch (no token)           -> 403 ; with Bearer entropy-lab -> 200
+defender SIGTERM -> phase KILLED_BY_DEFENDER, exit_code=42, defender_killed=true
+```

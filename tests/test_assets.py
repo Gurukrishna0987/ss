@@ -10,7 +10,11 @@ class RepositoryAssetTests(unittest.TestCase):
     def test_checked_in_json_assets_are_valid(self):
         json_files = sorted(
             path for path in ROOT.rglob("*.json")
-            if ".git" not in path.parts and "user_files" not in path.parts
+            if ".git" not in path.parts
+            and "user_files" not in path.parts
+            # Front-end dependency trees legitimately ship JSON5-ish
+            # tsconfig files that json.load rejects. They are not repo assets.
+            and "node_modules" not in path.parts
         )
         self.assertTrue(json_files)
         for path in json_files:
